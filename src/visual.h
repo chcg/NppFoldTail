@@ -167,20 +167,20 @@ static void update(View& v,bool includeHidden=false) {
             ((headerStyle>=118 && headerStyle<=127) ||
              (firstNonSpace!=std::string::npos && firstText.compare(firstNonSpace,5,"<?php")==0));
         const auto codeLexer=phpCode?69:lexer;
-        const bool isPython=lexer==2; // SCLEX_PYTHON: indentation-based folds have no closing suffix.
+        const bool isIndentBased=lexer==2 || lexer==48; // Python and YAML folds have no closing suffix.
         const bool isHtml=(lexer==4 || lexer==5) && !phpCode;
         const auto html=isHtml?htmlInfo(w,line,last,firstText,lexer==5):HtmlInfo{};
         if(isHtml && html.cut<0) continue;
-        const auto commentPos=isHtml || isPython?-1:commentCut(w,line,last,firstText,codeLexer);
-        auto cut=isPython?send(w,2136,line):isHtml?html.cut:commentPos>=0?commentPos:headerCut(w,line,last,firstText,codeLexer);
-        const auto tail=isPython?TailInfo{"",readLine(w,last)}:commentPos>=0 || isHtml?TailInfo{}:label(w,line,codeLexer);
+        const auto commentPos=isHtml || isIndentBased?-1:commentCut(w,line,last,firstText,codeLexer);
+        auto cut=isIndentBased?send(w,2136,line):isHtml?html.cut:commentPos>=0?commentPos:headerCut(w,line,last,firstText,codeLexer);
+        const auto tail=isIndentBased?TailInfo{"",readLine(w,last)}:commentPos>=0 || isHtml?TailInfo{}:label(w,line,codeLexer);
         auto suffix=isHtml?html.suffix:commentPos>=0?std::string("*/"):tail.suffix;
-        if(suffix.empty() && !isPython) continue;
+        if(suffix.empty() && !isIndentBased) continue;
         const bool commentBlock=commentPos>=0 || (isHtml && html.suffix=="-->");
-        const auto firstComment=commentBlock?TrailingComment{}:trailingComment(w,line,codeLexer,isPython?pos:cut);
-        const auto endLine=isHtml?html.endLine:isPython?last:tail.line;
+        const auto firstComment=commentBlock?TrailingComment{}:trailingComment(w,line,codeLexer,isIndentBased?pos:cut);
+        const auto endLine=isHtml?html.endLine:isIndentBased?last:tail.line;
         const auto lastComment=commentBlock?TrailingComment{}:trailingComment(w,endLine,codeLexer,0);
-        if(isPython && firstComment.position>=0) {
+        if(isIndentBased && firstComment.position>=0) {
             cut=firstComment.position;
             while(cut>pos && (firstText[static_cast<size_t>(cut-pos-1)]==' ' || firstText[static_cast<size_t>(cut-pos-1)]=='\t')) --cut;
         }
@@ -198,7 +198,7 @@ static void update(View& v,bool includeHidden=false) {
         visual.y=static_cast<int>(send(w,2165,0,cut));
         visual.height=static_cast<int>(send(w,2279,line)); // SCI_TEXTHEIGHT
         visual.style=static_cast<int>(send(w,sci::GetStyleAt,cut>pos?cut-1:pos));
-        visual.text=isPython?L" \u2026":L" \u2026 "+wide(suffix,cp);
+        visual.text=isIndentBased?L" \u2026":L" \u2026 "+wide(suffix,cp);
         visual.commentStart=visual.text.size();
         visual.commentStyle=foldtail::singleLineCommentStyle(codeLexer);
         const auto firstShown=showFirstComment?firstComment.text:std::string{};

@@ -34,7 +34,7 @@ def example(): …
 | CSS, Perl, PHP, Rust, PowerShell, R | Brace blocks; comment support varies as noted below |
 | JSON, JSON5 | Objects and arrays |
 | HTML, XML | Elements and comments; XML tag names are case-sensitive |
-| Python | Ellipsis only, without a closing delimiter |
+| Python, YAML (.yml/.yaml) | Ellipsis only, without a closing delimiter |
 
 ## Install
 
@@ -87,7 +87,7 @@ Creates `build/NppFoldTail.dll` using size optimisation and static C++ runtime l
 
 ## Changes in 0.8.0
 
-- Adds Python, JSON/JSON5, PHP, XML, Rust, PowerShell and R support.
+- Adds Python, YAML, JSON/JSON5, PHP, XML, Rust, PowerShell and R support.
 - Unifies tooltips to the first 10 source lines.
 - Adds optional first/last comment display and persistent menu settings.
 - Adds whole-block selection and matching preview highlighting.

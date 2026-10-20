@@ -7,10 +7,11 @@ namespace foldtail {
 // Lexilla lexer IDs and comment style IDs (SciLexer.h).
 inline bool supported(int lexer) {
     return lexer == 2 || lexer == 3 || lexer == 35 || lexer == 38 || lexer == 6 || lexer == 4 ||
-        lexer == 5 || lexer == 69 || lexer == 86 || lexer == 88 || lexer == 111 || lexer == 120;
+        lexer == 5 || lexer == 48 || lexer == 69 || lexer == 86 || lexer == 88 || lexer == 111 || lexer == 120;
 }
 inline bool comment(int lexer, int style) {
     if (lexer == 2) return style == 1 || style == 12;
+    if (lexer == 48) return style == 1; // YAML # comments, excluding scalar text.
     if (lexer == 4 || lexer == 5) return style == 9;
     if (lexer == 3 || lexer == 35)
         return style == 1 || style == 2 || style == 3 || style == 15 || style == 17 || style == 18;
@@ -31,7 +32,7 @@ inline int singleLineCommentStyle(int lexer) {
     if(lexer==69) return 125;
     if(lexer==4 || lexer==5 || lexer==38) return 9;
     if(lexer==120) return 6;
-    return 1; // Python, PowerShell and R.
+    return 1; // Python, YAML, PowerShell and R.
 }
 inline bool blockComment(int lexer,int style) {
     return ((lexer==3 || lexer==35) && (style==1 || style==3 || style==17 || style==18)) ||
