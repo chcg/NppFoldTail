@@ -236,7 +236,7 @@ static void toggle();
 static void toggleFirstComment();
 static void toggleLastComment();
 static void about() {
-    MessageBoxW(npp.npp,L"NppFoldTail " NPPFOLDTAIL_VERSION_W L" (x64)\n\nCompact folding previews for Notepad++ Plugin.",L"NppFoldTail",MB_OK);
+    MessageBoxW(npp.npp,L"NppFoldTail " NPPFOLDTAIL_VERSION_W L" (x64)\n\nA Notepad++ plugin for cleaner, more readable code folding.",L"NppFoldTail",MB_OK);
 }
 static FuncItem commands[]={
     {L"Enable",toggle,0,true,nullptr},

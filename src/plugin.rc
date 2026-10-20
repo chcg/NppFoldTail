@@ -14,7 +14,7 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "FileDescription", "A Notepad++ plugin for compact folding previews.\0"
+            VALUE "FileDescription", "A Notepad++ plugin for cleaner, more readable code folding.\0"
             VALUE "FileVersion", NPPFOLDTAIL_FILE_VERSION_STRING "\0"
             VALUE "InternalName", "NppFoldTail\0"
             VALUE "OriginalFilename", "NppFoldTail.dll\0"

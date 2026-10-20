@@ -1,6 +1,6 @@
 # NppFoldTail
 
-A Notepad++ plugin for compact folding previews.
+A Notepad++ plugin for cleaner, more readable code folding.
 
 ```js
 setTimeout(() => { … }, 1000);
@@ -42,10 +42,10 @@ Requires Windows and Notepad++ x64. x86 and ARM64 builds are not provided.
 
 Manually tested with Notepad++ v8.9.8.1 (64-bit). Compatibility with other versions has not been verified.
 
-1. Download `NppFoldTail-0.8.0-x64.zip` from [Releases](https://github.com/seantw/NppFoldTail/releases).
+1. Download `NppFoldTail-0.8.1-x64.zip` from [Releases](https://github.com/seantw/NppFoldTail/releases).
 2. Close all Notepad++ windows.
 3. Extract the ZIP and place `NppFoldTail.dll` in `Notepad++/plugins/NppFoldTail/`.
-4. Restart Notepad++ and check **Plugins → NppFoldTail → About NppFoldTail** for version **0.8.0**.
+4. Restart Notepad++ and check **Plugins → NppFoldTail → About NppFoldTail** for version **0.8.1**.
 
 ## Options
 
@@ -84,6 +84,10 @@ Creates `build/NppFoldTail.dll` using size optimisation and static C++ runtime l
 - Other embedded script languages in HTML and XML CDATA previews are not supported.
 - PowerShell block comments are not previewed.
 - Synthetic preview text cannot be edited directly.
+
+## Changes in 0.8.1
+
+- Updates the plugin description in the README, About dialog and DLL file properties to better describe its purpose. Folding behaviour is unchanged from 0.8.0.
 
 ## Changes in 0.8.0
 
