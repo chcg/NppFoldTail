@@ -6,18 +6,37 @@
 namespace foldtail {
 // Lexilla lexer IDs and comment style IDs (SciLexer.h).
 inline bool supported(int lexer) {
-    return lexer == 3 || lexer == 35 || lexer == 38 || lexer == 6 || lexer == 4;
+    return lexer == 2 || lexer == 3 || lexer == 35 || lexer == 38 || lexer == 6 || lexer == 4 ||
+        lexer == 5 || lexer == 69 || lexer == 86 || lexer == 88 || lexer == 111 || lexer == 120;
 }
 inline bool comment(int lexer, int style) {
+    if (lexer == 2) return style == 1 || style == 12;
+    if (lexer == 4 || lexer == 5) return style == 9;
     if (lexer == 3 || lexer == 35)
         return style == 1 || style == 2 || style == 3 || style == 15 || style == 17 || style == 18;
     if (lexer == 38) return style == 9;
     if (lexer == 6) return style == 2 || style == 3;
+    if (lexer == 120) return style == 6 || style == 7;
+    if (lexer == 69) return style == 124 || style == 125;
+    if (lexer == 86) return style == 1;
+    if (lexer == 88) return style == 1 || style == 13 || style == 16;
+    if (lexer == 111) return style >= 1 && style <= 4;
     return false;
+}
+inline int operatorStyle(int lexer) {
+    return lexer==69?127:lexer==111?16:lexer==88?6:(lexer==120 || lexer==86)?8:lexer==38?5:10;
+}
+inline int singleLineCommentStyle(int lexer) {
+    if(lexer==3 || lexer==35 || lexer==6 || lexer==111) return 2;
+    if(lexer==69) return 125;
+    if(lexer==4 || lexer==5 || lexer==38) return 9;
+    if(lexer==120) return 6;
+    return 1; // Python, PowerShell and R.
 }
 inline bool blockComment(int lexer,int style) {
     return ((lexer==3 || lexer==35) && (style==1 || style==3 || style==17 || style==18)) ||
-        (lexer==38 && style==9);
+        (lexer==38 && style==9) || (lexer==69 && style==124) ||
+        (lexer==111 && (style==1 || style==3));
 }
 struct HtmlStart { size_t end=std::string::npos; std::string name; };
 inline bool htmlNameChar(unsigned char c) {return std::isalnum(c) || c=='-' || c==':' || c=='_';}
@@ -25,7 +44,7 @@ inline std::string lowerTag(std::string text) {
     for(auto& c:text) c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return text;
 }
-template<class StyleAt> HtmlStart htmlStart(const std::string& text,StyleAt styleAt) {
+template<class StyleAt> HtmlStart htmlStart(const std::string& text,StyleAt styleAt,bool xml=false) {
     const auto start=text.find_first_not_of(" \t");
     if(start==std::string::npos || start+1>=text.size() || text[start]!='<' ||
         !std::isalpha(static_cast<unsigned char>(text[start+1])) ||
@@ -41,17 +60,19 @@ template<class StyleAt> HtmlStart htmlStart(const std::string& text,StyleAt styl
             auto previous=i;
             while(previous>nameEnd && std::isspace(static_cast<unsigned char>(text[previous-1]))) --previous;
             if(previous>nameEnd && text[previous-1]=='/') return {};
-            return {i+1,lowerTag(text.substr(start+1,nameEnd-start-1))};
+            auto name=text.substr(start+1,nameEnd-start-1);
+            return {i+1,xml?name:lowerTag(name)};
         }
     }
     return {};
 }
-template<class StyleAt> std::string htmlTail(const std::string& text,const std::string& name,StyleAt styleAt) {
+template<class StyleAt> std::string htmlTail(const std::string& text,const std::string& name,StyleAt styleAt,bool xml=false) {
     for(size_t start=0;(start=text.find("</",start))!=std::string::npos;++start) {
         if(styleAt(start)!=1 && styleAt(start)!=2) continue;
         auto end=start+2;
         while(end<text.size() && htmlNameChar(static_cast<unsigned char>(text[end]))) ++end;
-        if(lowerTag(text.substr(start+2,end-start-2))!=name) continue;
+        auto closingName=text.substr(start+2,end-start-2);
+        if((xml?closingName:lowerTag(closingName))!=name) continue;
         auto close=end;
         while(close<text.size() && std::isspace(static_cast<unsigned char>(text[close]))) ++close;
         if(close>=text.size() || text[close]!='>') continue;
@@ -69,8 +90,8 @@ std::string tail(const std::string& text, int lexer, StyleAt styleAt) {
         const auto style=styleAt(i);
         if (comment(lexer, style)) continue;
         // Only syntax operators count: braces inside strings are not block endings.
-        const bool op=style==(lexer==38 ? 5 : 10);
-        if (brace==std::string::npos && text[i]=='}' && op) brace=out.size();
+        const bool op=style==operatorStyle(lexer);
+        if (brace==std::string::npos && (text[i]=='}' || (lexer==120 && text[i]==']')) && op) brace=out.size();
         out += text[i];
     }
     const auto start = brace!=std::string::npos ? brace : out.find_first_not_of(" \t\r\n");

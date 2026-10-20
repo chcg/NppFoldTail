@@ -57,7 +57,8 @@ static LRESULT headerCut(HWND w,LRESULT line,LRESULT last,const std::string& tex
     const auto pos=send(w,sci::PositionFromLine,line);
     auto cut=send(w,2136,line); // SCI_GETLINEENDPOSITION
     for(size_t j=0;j<text.size();++j) {
-        if(text[j]!='{' || send(w,sci::GetStyleAt,pos+j)!=(lexer==38?5:10)) continue;
+        if((text[j]!='{' && !(lexer==120 && text[j]=='[')) ||
+            send(w,sci::GetStyleAt,pos+j)!=foldtail::operatorStyle(lexer)) continue;
         const auto match=send(w,2353,pos+j,0); // SCI_BRACEMATCH
         const auto closeLine=match>=0 ? send(w,2166,match) : -1;
         if(closeLine>line && closeLine<=last) {cut=pos+j+1;break;}
@@ -84,8 +85,26 @@ static std::wstring blockTooltip(HWND w,LRESULT header,LRESULT last,UINT cp) {
     for(auto line=header;line<=last && line<header+10;++line) lines.push_back(wide(readLine(w,line),cp));
     return foldtail::preview(lines,last>=header+10);
 }
-struct HtmlInfo {LRESULT cut=-1;std::string suffix;};
-static HtmlInfo htmlInfo(HWND w,LRESULT header,LRESULT last,const std::string& text) {
+struct TrailingComment {LRESULT position=-1;std::string text;};
+static TrailingComment trailingComment(HWND w,LRESULT line,int lexer,LRESULT after) {
+    if(line<0) return {};
+    const auto text=readLine(w,line);
+    const auto pos=send(w,sci::PositionFromLine,line);
+    bool code=false;
+    for(size_t i=0;i<text.size();++i) {
+        const bool isComment=foldtail::comment(lexer,static_cast<int>(send(w,sci::GetStyleAt,pos+i)));
+        if(isComment && code && pos+static_cast<LRESULT>(i)>=after) {
+            auto end=i;
+            while(end<text.size() && foldtail::comment(lexer,static_cast<int>(send(w,sci::GetStyleAt,pos+end)))) ++end;
+            while(end>i && std::isspace(static_cast<unsigned char>(text[end-1]))) --end;
+            return {pos+static_cast<LRESULT>(i),text.substr(i,end-i)};
+        }
+        if(!isComment && !std::isspace(static_cast<unsigned char>(text[i]))) code=true;
+    }
+    return {};
+}
+struct HtmlInfo {LRESULT cut=-1;std::string suffix;LRESULT endLine=-1;};
+static HtmlInfo htmlInfo(HWND w,LRESULT header,LRESULT last,const std::string& text,bool xml) {
     const auto pos=send(w,sci::PositionFromLine,header);
     const auto comment=text.find_first_not_of(" \t");
     if(comment!=std::string::npos && text.compare(comment,4,"<!--")==0 &&
@@ -98,24 +117,27 @@ static HtmlInfo htmlInfo(HWND w,LRESULT header,LRESULT last,const std::string& t
             if(end==std::string::npos) continue;
             const auto endPos=send(w,sci::PositionFromLine,line)+end;
             if(send(w,sci::GetStyleAt,endPos)==9)
-                return {pos+static_cast<LRESULT>(comment)+4,"-->"};
+                return {pos+static_cast<LRESULT>(comment)+4,"-->",line};
         }
         return {};
     }
-    const auto opening=foldtail::htmlStart(text,[&](size_t i){return send(w,sci::GetStyleAt,pos+i);});
+    const auto opening=foldtail::htmlStart(text,[&](size_t i){return send(w,sci::GetStyleAt,pos+i);},xml);
     if(opening.end==std::string::npos) return {};
     for(auto line=last;line>header && line>=last-8;--line) {
         if(send(w,sci::GetLineVisible,line)) continue;
         const auto lastText=readLine(w,line);
         const auto lastPos=send(w,sci::PositionFromLine,line);
-        auto suffix=foldtail::htmlTail(lastText,opening.name,[&](size_t i){return send(w,sci::GetStyleAt,lastPos+i);});
-        if(!suffix.empty()) return {pos+static_cast<LRESULT>(opening.end),std::move(suffix)};
+        auto suffix=foldtail::htmlTail(lastText,opening.name,[&](size_t i){return send(w,sci::GetStyleAt,lastPos+i);},xml);
+        if(!suffix.empty()) return {pos+static_cast<LRESULT>(opening.end),std::move(suffix),line};
     }
     return {};
 }
 static void update(View& v,bool includeHidden=false) {
-    if(!enabled || v.busy) return;
-    suppressLines(v);
+    if(v.busy) return;
+    if(!applyPresentation(v)) {
+        if(!v.visuals.empty()) {clearVisuals(v);InvalidateRect(v.window,nullptr,FALSE);}
+        return;
+    }
     if(!includeHidden && !IsWindowVisible(v.window)) return;
     v.busy=true;
     auto w=v.window;
@@ -139,23 +161,51 @@ static void update(View& v,bool includeHidden=false) {
         const auto firstText=readLine(w,line);
         const auto pos=send(w,sci::PositionFromLine,line);
         const auto last=send(w,sci::GetLastChild,line,-1);
-        const bool isHtml=lexer==4;
-        const auto html=isHtml?htmlInfo(w,line,last,firstText):HtmlInfo{};
+        const auto firstNonSpace=firstText.find_first_not_of(" \t\r\n");
+        const auto headerStyle=firstNonSpace==std::string::npos?0:send(w,sci::GetStyleAt,pos+firstNonSpace);
+        const bool phpCode=(lexer==4 || lexer==69) &&
+            ((headerStyle>=118 && headerStyle<=127) ||
+             (firstNonSpace!=std::string::npos && firstText.compare(firstNonSpace,5,"<?php")==0));
+        const auto codeLexer=phpCode?69:lexer;
+        const bool isPython=lexer==2; // SCLEX_PYTHON: indentation-based folds have no closing suffix.
+        const bool isHtml=(lexer==4 || lexer==5) && !phpCode;
+        const auto html=isHtml?htmlInfo(w,line,last,firstText,lexer==5):HtmlInfo{};
         if(isHtml && html.cut<0) continue;
-        const auto commentPos=isHtml?-1:commentCut(w,line,last,firstText,lexer);
-        const auto cut=isHtml?html.cut:commentPos>=0?commentPos:headerCut(w,line,last,firstText,lexer);
-        const auto tail=commentPos>=0 || isHtml?TailInfo{}:label(w,line);
-        const auto suffix=isHtml?html.suffix:commentPos>=0?std::string("*/"):tail.suffix;
-        if(suffix.empty()) continue;
+        const auto commentPos=isHtml || isPython?-1:commentCut(w,line,last,firstText,codeLexer);
+        auto cut=isPython?send(w,2136,line):isHtml?html.cut:commentPos>=0?commentPos:headerCut(w,line,last,firstText,codeLexer);
+        const auto tail=isPython?TailInfo{"",readLine(w,last)}:commentPos>=0 || isHtml?TailInfo{}:label(w,line,codeLexer);
+        auto suffix=isHtml?html.suffix:commentPos>=0?std::string("*/"):tail.suffix;
+        if(suffix.empty() && !isPython) continue;
+        const bool commentBlock=commentPos>=0 || (isHtml && html.suffix=="-->");
+        const auto firstComment=commentBlock?TrailingComment{}:trailingComment(w,line,codeLexer,isPython?pos:cut);
+        const auto endLine=isHtml?html.endLine:isPython?last:tail.line;
+        const auto lastComment=commentBlock?TrailingComment{}:trailingComment(w,endLine,codeLexer,0);
+        if(isPython && firstComment.position>=0) {
+            cut=firstComment.position;
+            while(cut>pos && (firstText[static_cast<size_t>(cut-pos-1)]==' ' || firstText[static_cast<size_t>(cut-pos-1)]=='\t')) --cut;
+        }
+        if(isHtml && !lastComment.text.empty()) {
+            const auto commentOffset=suffix.rfind(lastComment.text);
+            if(commentOffset!=std::string::npos) {
+                suffix.erase(commentOffset);
+                while(!suffix.empty() && std::isspace(static_cast<unsigned char>(suffix.back()))) suffix.pop_back();
+            }
+        }
         Visual visual{};visual.doc=doc;
+        visual.selectionTrigger=cut;
+        visual.blockEnd=send(w,2136,last); // Include the complete closing line, but not the following newline.
         visual.x=static_cast<int>(send(w,2164,0,cut));
         visual.y=static_cast<int>(send(w,2165,0,cut));
         visual.height=static_cast<int>(send(w,2279,line)); // SCI_TEXTHEIGHT
         visual.style=static_cast<int>(send(w,sci::GetStyleAt,cut>pos?cut-1:pos));
-        visual.text=L" \u2026 "+wide(suffix,cp);
-        if(commentPos>=0 || isHtml) visual.tip=blockTooltip(w,line,last,cp);
-        else visual.tip=wide(foldtail::withoutEol(firstText),cp)+L"\r\n    \u22EE\r\n"+
-            wide(foldtail::withoutEol(tail.raw),cp);
+        visual.text=isPython?L" \u2026":L" \u2026 "+wide(suffix,cp);
+        visual.commentStart=visual.text.size();
+        visual.commentStyle=foldtail::singleLineCommentStyle(codeLexer);
+        const auto firstShown=showFirstComment?firstComment.text:std::string{};
+        const auto lastShown=showLastComment?lastComment.text:std::string{};
+        if(!firstShown.empty()) visual.text+=L" "+wide(firstShown,cp);
+        if(!lastShown.empty()) visual.text+=(firstShown.empty()?L" ":L" \uFF5E ")+wide(lastShown,cp);
+        visual.tip=blockTooltip(w,line,last,cp);
         visual.mask={visual.x,visual.y,client.right,visual.y+visual.height};
         // Never paint over the margin when a header is horizontally out of view.
         const auto textStart=send(w,2164,0,pos)+send(w,2398); // SCI_GETXOFFSET
@@ -181,6 +231,8 @@ static void update(View& v,bool includeHidden=false) {
         auto old=v.visuals.find(entry.first);
         const bool added=old==v.visuals.end();
         if(!added && old->second.text==entry.second.text && old->second.tip==entry.second.tip &&
+            old->second.commentStart==entry.second.commentStart && old->second.commentStyle==entry.second.commentStyle &&
+            old->second.selectionTrigger==entry.second.selectionTrigger && old->second.blockEnd==entry.second.blockEnd &&
             old->second.style==entry.second.style && sameRect(old->second.mask,entry.second.mask) &&
             sameRect(old->second.dots,entry.second.dots)) continue;
         if(!added) {auto ti=tool(v,entry.first);send(v.tooltip,TTM_DELTOOLW,0,reinterpret_cast<LPARAM>(&ti));}
@@ -191,21 +243,107 @@ static void update(View& v,bool includeHidden=false) {
     if(changed) InvalidateRect(w,nullptr,FALSE);
     v.busy=false;
 }
+static LRESULT CALLBACK previewWindowProc(HWND window,UINT message,WPARAM a,LPARAM b) {
+    if(message==WM_NCCREATE) {
+        const auto create=reinterpret_cast<CREATESTRUCTW*>(b);
+        SetWindowLongPtr(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    }
+    if(message==WM_NCHITTEST) return HTTRANSPARENT;
+    if(message==WM_ERASEBKGND) return 1;
+    if(message==WM_PAINT) {
+        PAINTSTRUCT paint{};HDC dc=BeginPaint(window,&paint);
+        const auto cache=reinterpret_cast<PreviewBitmap*>(GetWindowLongPtr(window,GWLP_USERDATA));
+        if(cache && cache->bitmap) {
+            HDC source=CreateCompatibleDC(dc);
+            if(source) {
+                auto old=SelectObject(source,cache->bitmap);
+                BitBlt(dc,0,0,cache->width,cache->height,source,0,0,SRCCOPY);
+                SelectObject(source,old);DeleteDC(source);
+            }
+        }
+        EndPaint(window,&paint);return 0;
+    }
+    return DefWindowProcW(window,message,a,b);
+}
 static void paintVisuals(View& v) {
     if(!enabled || v.visuals.empty() || send(v.window,sci::GetDocPointer)!=v.doc) return;
     HDC dc=GetDC(v.window);if(!dc) return;
-    for(const auto& entry:v.visuals) {
-        const auto& visual=entry.second;
+    HDC buffer=CreateCompatibleDC(dc);
+    if(!buffer) {ReleaseDC(v.window,dc);return;}
+    for(auto& entry:v.visuals) {
+        auto& visual=entry.second;
         if(send(v.window,sci::GetFoldExpanded,entry.first)) continue;
         HFONT font=visualFont(v.window,visual.style,dc);
-        HGDIOBJ old=font?SelectObject(dc,font):nullptr;
-        SetTextColor(dc,static_cast<COLORREF>(send(v.window,2481,visual.style)));
-        SetBkColor(dc,static_cast<COLORREF>(send(v.window,2482,visual.style)));
-        TEXTMETRICW metrics{};GetTextMetricsW(dc,&metrics);
-        auto y=visual.y+std::max<LONG>(0,(visual.height-metrics.tmHeight)/2);
-        ExtTextOutW(dc,visual.x,y,ETO_OPAQUE|ETO_CLIPPED,&visual.mask,visual.text.data(),static_cast<UINT>(visual.text.size()),nullptr);
-        if(old) SelectObject(dc,old);
-        if(font) DeleteObject(font);
+        if(!font) continue;
+        LOGFONTW fontInfo{};
+        GetObjectW(font,sizeof(fontInfo),&fontInfo);
+        auto foreground=static_cast<COLORREF>(send(v.window,2481,visual.style));
+        auto commentColour=static_cast<COLORREF>(send(v.window,2481,visual.commentStyle));
+        const auto normalBackground=static_cast<COLORREF>(send(v.window,2482,visual.style));
+        auto background=normalBackground;
+        const auto selectionStart=send(v.window,2143),selectionEnd=send(v.window,2145);
+        const bool selected=selectionStart<visual.selectionTrigger && selectionEnd>=visual.blockEnd;
+        if(selected) {
+            const int backElement=GetFocus()==v.window?11:17;
+            const int textElement=GetFocus()==v.window?10:16;
+            const auto colour=static_cast<DWORD>(send(v.window,2754,backElement));
+            const auto alpha=(colour>>24)&255;
+            const auto blend=[&](DWORD channel,DWORD base) {return (channel*alpha+base*(255-alpha)+127)/255;};
+            background=RGB(blend(GetRValue(colour),GetRValue(normalBackground)),
+                blend(GetGValue(colour),GetGValue(normalBackground)),blend(GetBValue(colour),GetBValue(normalBackground)));
+            if(send(v.window,2756,textElement)) foreground=commentColour=static_cast<COLORREF>(send(v.window,2754,textElement))&0xffffff;
+        }
+        const int width=visual.mask.right-visual.mask.left;
+        const int height=visual.height;
+        if(width<=0 || height<=0) {DeleteObject(font);continue;}
+        auto& cache=visual.cache;
+        // Content/position changes replace Visual in update(); appearance changes invalidate here.
+        if(cache && (cache->width!=width || cache->height!=height ||
+            cache->foreground!=foreground || cache->commentColour!=commentColour ||
+            cache->background!=background || std::memcmp(&cache->font,&fontInfo,sizeof(fontInfo))!=0)) cache.reset();
+        if(!cache) {
+            auto next=std::make_unique<PreviewBitmap>();
+            next->bitmap=CreateCompatibleBitmap(dc,width,height);
+            if(!next->bitmap) {DeleteObject(font);continue;}
+            next->width=width;next->height=height;next->font=fontInfo;
+            next->foreground=foreground;next->commentColour=commentColour;next->background=background;
+            auto oldBitmap=SelectObject(buffer,next->bitmap);
+            auto oldFont=SelectObject(buffer,font);
+            SetTextColor(buffer,foreground);SetBkColor(buffer,background);
+            TEXTMETRICW metrics{};GetTextMetricsW(buffer,&metrics);
+            const auto y=std::max<LONG>(0,(height-metrics.tmHeight)/2);
+            RECT mask{0,0,width,height};
+            SetBkColor(buffer,normalBackground);
+            ExtTextOutW(buffer,0,0,ETO_OPAQUE,&mask,nullptr,0,nullptr);
+            SIZE textSize{};GetTextExtentPoint32W(buffer,visual.text.data(),static_cast<int>(visual.text.size()),&textSize);
+            RECT textMask{0,0,std::min<LONG>(width,textSize.cx),height};
+            SetBkColor(buffer,background);
+            ExtTextOutW(buffer,0,y,ETO_OPAQUE|ETO_CLIPPED,&textMask,visual.text.data(),static_cast<UINT>(visual.commentStart),nullptr);
+            if(visual.commentStart<visual.text.size()) {
+                SIZE prefix{};
+                GetTextExtentPoint32W(buffer,visual.text.data(),static_cast<int>(visual.commentStart),&prefix);
+                SetTextColor(buffer,commentColour);
+                const auto oldMode=SetBkMode(buffer,TRANSPARENT);
+                ExtTextOutW(buffer,prefix.cx,y,ETO_CLIPPED,&mask,visual.text.data()+visual.commentStart,
+                    static_cast<UINT>(visual.text.size()-visual.commentStart),nullptr);
+                SetBkMode(buffer,oldMode);
+            }
+            SelectObject(buffer,oldFont);SelectObject(buffer,oldBitmap);
+            cache=std::move(next);
+        }
+        // A child window owns these pixels; editor caret paints cannot erase them.
+        if(!cache->overlay) {
+            static const auto registered=[] {
+                WNDCLASSW cls{};cls.lpfnWndProc=previewWindowProc;
+                cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"NppFoldTailPreview";
+                return RegisterClassW(&cls);
+            }();
+            if(registered) cache->overlay=CreateWindowExW(WS_EX_NOACTIVATE,L"NppFoldTailPreview",L"",
+                WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,visual.x,visual.y,width,height,
+                v.window,nullptr,GetModuleHandleW(nullptr),cache.get());
+        }
+        DeleteObject(font);
     }
+    DeleteDC(buffer);
     ReleaseDC(v.window,dc);
 }
