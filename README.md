@@ -19,7 +19,7 @@ def example(): …
 ## Features
 
 - Shows closing delimiters and hides trailing header text without modifying the document.
-- Click `…` to expand; hover to preview the first 10 source lines. Longer blocks end with a separate `    ⋮` line.
+- Click `…` to expand; hover to preview the first 10 source lines. Longer blocks end with a separate `⋮` line, approximately centred below the last displayed nonblank line.
 - Optionally shows trailing comments from the first and last folded lines, using the language's single-line comment colour.
 - Remembers menu settings across Notepad++ restarts.
 - Highlights the preview when the hidden block is selected. Selecting through a collapsed header extends the actual selection through the hidden content for copying or deletion.

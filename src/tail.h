@@ -120,7 +120,28 @@ inline std::wstring preview(const std::vector<std::wstring>& lines,bool more=fal
         if(i) result+=L"\r\n";
         result+=line;
     }
-    if(more || lines.size()>10) result+=L"\r\n    \u22EE";
+    if(more || lines.size()>10) {
+        size_t indent=0;
+        // Centre approximately below the final visible nonblank line.
+        for(size_t i=count;i>0;--i) {
+            const auto& line=lines[i-1];
+            const auto first=line.find_first_not_of(L" \t\r\n");
+            const auto last=line.find_last_not_of(L" \t\r\n");
+            if(first==std::wstring::npos) continue;
+            size_t column=0,leading=0;
+            for(size_t j=0;j<=last;++j) {
+                if(j==first) leading=column;
+                const auto c=line[j];
+                if(c==L'\t') column+=4-column%4;
+                else column+=((c>=0x2E80 && c<=0xA4CF) ||
+                    (c>=0xAC00 && c<=0xD7A3) || (c>=0xF900 && c<=0xFAFF) ||
+                    (c>=0xFF01 && c<=0xFF60))?2:1;
+            }
+            indent=leading+(column-leading)/2;
+            break;
+        }
+        result+=L"\r\n"+std::wstring(indent,L' ')+L"\u22EE";
+    }
     return result;
 }
 }
