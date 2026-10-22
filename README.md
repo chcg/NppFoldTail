@@ -20,10 +20,11 @@ def example(): …
 
 - Shows closing delimiters and hides trailing header text without modifying the document.
 - Click `…` to expand; hover to preview the first 10 source lines. Longer blocks end with a separate `⋮` line, approximately centred below the last displayed nonblank line.
+- The ` … ` marker uses the foreground and background colours of Notepad++'s **Brace highlight style**. Selection colours take precedence while the folded block is selected.
 - Optionally shows trailing comments from the first and last folded lines, using the language's single-line comment colour.
 - Remembers menu settings across Notepad++ restarts.
 - Highlights the preview when the hidden block is selected. Selecting through a collapsed header extends the actual selection through the hidden content for copying or deletion.
-- Uses cached preview windows to avoid flicker while the caret blinks or moves.
+- Reuses cached preview windows while scrolling and repaints only when their content or appearance changes, reducing flicker with many folded blocks.
 - Hides folding lines only for supported languages; other languages retain Notepad++'s normal folding display.
 
 ## Supported languages
@@ -42,10 +43,10 @@ Requires Windows and Notepad++ x64. x86 and ARM64 builds are not provided.
 
 Manually tested with Notepad++ v8.9.8.1 (64-bit). Compatibility with other versions has not been verified.
 
-1. Download `NppFoldTail-0.8.1-x64.zip` from [Releases](https://github.com/seantw/NppFoldTail/releases).
+1. Download `NppFoldTail-0.8.2-x64.zip` from [Releases](https://github.com/seantw/NppFoldTail/releases).
 2. Close all Notepad++ windows.
 3. Extract the ZIP and place `NppFoldTail.dll` in `Notepad++/plugins/NppFoldTail/`.
-4. Restart Notepad++ and check **Plugins → NppFoldTail → About NppFoldTail** for version **0.8.1**.
+4. Restart Notepad++ and check **Plugins → NppFoldTail → About NppFoldTail** for version **0.8.2**.
 
 ## Options
 
@@ -62,6 +63,8 @@ When both selected comments are present, they are separated by ` ～ `. No separ
 All three settings are saved immediately to `NppFoldTail.ini` in Notepad++'s plugin configuration directory and restored on restart.
 
 ## Selecting folded content
+
+For normal single-caret navigation, Right at a collapsed header's display boundary and End on that header jump to the next visible line's start. Left at that next line's start returns to the boundary. Up/Down navigation clamps the caret to the visible header text. Clicking synthetic text other than `…` places the caret at the boundary; clicking `…` still expands the block. Ctrl/Alt shortcuts and rectangular/multiple selections retain their normal handling.
 
 When a single normal text selection reaches the end of a collapsed header, it extends through the complete hidden block and its closing line, excluding the following newline. The preview receives the selection background colour.
 
@@ -84,6 +87,14 @@ Creates `build/NppFoldTail.dll` using size optimisation and static C++ runtime l
 - Other embedded script languages in HTML and XML CDATA previews are not supported.
 - PowerShell block comments are not previewed.
 - Synthetic preview text cannot be edited directly.
+
+## Changes in 0.8.2
+
+- Reduces scrolling flicker by reusing preview bitmaps and windows, batching position updates and limiting work to visible previews.
+- Uses the active theme's Brace highlight style foreground and background colours for ` … `, while keeping selection highlighting.
+- Makes spacing around `…` consistent for Python and YAML.
+- Adds intuitive caret navigation around folded content: Right/End move to the next visible line; Left can return to the folded header boundary.
+- Prevents caret movement and clicks from placing the caret inside obscured header text. Shift selection continues to select the actual hidden block.
 
 ## Changes in 0.8.1
 

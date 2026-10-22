@@ -39,10 +39,12 @@ struct PreviewBitmap {
     HWND overlay{};
     LOGFONTW font{};
     COLORREF foreground{}, commentColour{}, background{};
+    COLORREF markerForeground{}, markerBackground{};
     int width{}, height{};
     ~PreviewBitmap() {if(overlay) DestroyWindow(overlay);if(bitmap) DeleteObject(bitmap);}
 };
 struct Visual {
+    bool visible=true;
     RECT mask{}, dots{};
     int x{}, y{}, height{}, style{};
     int commentStyle{};
@@ -58,6 +60,7 @@ struct View {
     LRESULT doc{};
     int originalStyle{};
     bool busy{};
+    bool preparingPaint{};
     bool presentationActive{};
     bool settingFoldFlags{};
     bool addedClipChildren{};
@@ -142,6 +145,7 @@ static void extendFoldSelection(View& v) {
     auto start=std::min(anchor,caret),end=std::max(anchor,caret);
     for(const auto& entry:v.visuals) {
         const auto& visual=entry.second;
+        if(!visual.visible) continue;
         if(send(v.window,sci::GetFoldExpanded,entry.first)) continue;
         if(start<visual.selectionTrigger && end>=visual.selectionTrigger && end<visual.blockEnd)
             end=visual.blockEnd;
@@ -152,11 +156,75 @@ static void extendFoldSelection(View& v) {
         else send(v.window,2160,end,caret);
     }
 }
+static const Visual* collapsedVisual(View& v,LRESULT line) {
+    auto found=v.visuals.find(line);
+    if(found==v.visuals.end() || !found->second.visible ||
+        send(v.window,sci::GetFoldExpanded,line)) return nullptr;
+    return &found->second;
+}
+static void placeCaret(HWND w,LRESULT position) {
+    send(w,2160,position,position); // SCI_SETSEL: no source text is changed.
+    send(w,2169); // SCI_SCROLLCARET
+}
+static bool navigateFold(View& v,WPARAM key) {
+    if(send(v.window,2570)!=1 || send(v.window,2423)!=0 ||
+        send(v.window,2008)!=send(v.window,2009)) return false;
+    const auto caret=send(v.window,2008);
+    const auto line=send(v.window,2166,caret); // SCI_LINEFROMPOSITION
+    const auto visual=collapsedVisual(v,line);
+    if(visual && (key==VK_END || (key==VK_RIGHT && caret>=visual->selectionTrigger))) {
+        const auto visible=send(v.window,2220,line); // SCI_VISIBLEFROMDOCLINE
+        const auto next=send(v.window,sci::DocLineFromVisible,visible+1);
+        placeCaret(v.window,next>line && next<send(v.window,sci::GetLineCount)?
+            send(v.window,sci::PositionFromLine,next):visual->selectionTrigger);
+        return true;
+    }
+    if(key==VK_LEFT && caret==send(v.window,sci::PositionFromLine,line)) {
+        const auto visible=send(v.window,2220,line);
+        if(visible>0) {
+            const auto previous=send(v.window,sci::DocLineFromVisible,visible-1);
+            if(const auto before=collapsedVisual(v,previous)) {
+                placeCaret(v.window,before->selectionTrigger);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+static void clampFoldCaret(View& v) {
+    if(send(v.window,2570)!=1 || send(v.window,2423)!=0 ||
+        send(v.window,2008)!=send(v.window,2009)) return;
+    const auto caret=send(v.window,2008);
+    if(const auto visual=collapsedVisual(v,send(v.window,2166,caret)))
+        if(caret>visual->selectionTrigger) placeCaret(v.window,visual->selectionTrigger);
+}
 static LRESULT CALLBACK subclass(HWND w,UINT msg,WPARAM a,LPARAM b,UINT_PTR id,DWORD_PTR ref) {
     auto& v=*reinterpret_cast<View*>(ref);
     if(msg==WM_PAINT) {
+        // Place child overlays before Scintilla paints, so its clipping region
+        // already excludes their new positions after a scroll.
+        if(!v.preparingPaint) {
+            v.preparingPaint=true;
+            try { update(v); paintVisuals(v); } catch (...) { v.busy=false; }
+            v.preparingPaint=false;
+        }
+        return DefSubclassProc(w,msg,a,b);
+    }
+    const bool control=(GetKeyState(VK_CONTROL)&0x8000)!=0;
+    const bool alt=(GetKeyState(VK_MENU)&0x8000)!=0;
+    const bool shift=(GetKeyState(VK_SHIFT)&0x8000)!=0;
+    if(enabled && msg==WM_KEYDOWN && !control && !alt &&
+        (a==VK_LEFT || a==VK_RIGHT || a==VK_UP || a==VK_DOWN || a==VK_HOME || a==VK_END)) {
+        try {
+            update(v);
+            if(!shift && navigateFold(v,a)) {paintVisuals(v);return 0;}
+        } catch (...) {v.busy=false;}
         auto result=DefSubclassProc(w,msg,a,b);
-        try { update(v); paintVisuals(v); } catch (...) { v.busy=false; }
+        try {
+            update(v);
+            if(shift) extendFoldSelection(v);else clampFoldCaret(v);
+            paintVisuals(v);
+        } catch (...) {v.busy=false;}
         return result;
     }
     if(enabled && (msg==WM_LBUTTONDOWN || msg==WM_LBUTTONUP)) {
@@ -175,6 +243,15 @@ static LRESULT CALLBACK subclass(HWND w,UINT msg,WPARAM a,LPARAM b,UINT_PTR id,D
                 InvalidateRect(w,nullptr,FALSE);
             }
             return 0;
+        }
+        if(msg==WM_LBUTTONDOWN && line<0 && !shift && !control && !alt) {
+            POINT point{GET_X_LPARAM(b),GET_Y_LPARAM(b)};
+            for(const auto& entry:v.visuals) {
+                const auto& visual=entry.second;
+                if(visual.visible && PtInRect(&visual.mask,point)) {
+                    SetFocus(w);placeCaret(w,visual.selectionTrigger);return 0;
+                }
+            }
         }
     }
     if(msg==WM_CAPTURECHANGED) v.pressed=-1;

@@ -50,7 +50,7 @@ static HFONT visualFont(HWND w,int style,HDC dc) {
 static bool sameRect(const RECT& a,const RECT& b) {return EqualRect(&a,&b)!=FALSE;}
 static LRESULT hit(const View& v,int x,int y) {
     POINT p{x,y};
-    for(const auto& entry:v.visuals) if(PtInRect(&entry.second.dots,p)) return entry.first;
+    for(const auto& entry:v.visuals) if(entry.second.visible && PtInRect(&entry.second.dots,p)) return entry.first;
     return -1;
 }
 static LRESULT headerCut(HWND w,LRESULT line,LRESULT last,const std::string& text,int lexer) {
@@ -198,7 +198,7 @@ static void update(View& v,bool includeHidden=false) {
         visual.y=static_cast<int>(send(w,2165,0,cut));
         visual.height=static_cast<int>(send(w,2279,line)); // SCI_TEXTHEIGHT
         visual.style=static_cast<int>(send(w,sci::GetStyleAt,cut>pos?cut-1:pos));
-        visual.text=isIndentBased?L" \u2026":L" \u2026 "+wide(suffix,cp);
+        visual.text=L" \u2026 "+wide(suffix,cp);
         visual.commentStart=visual.text.size();
         visual.commentStyle=foldtail::singleLineCommentStyle(codeLexer);
         const auto firstShown=showFirstComment?firstComment.text:std::string{};
@@ -209,7 +209,8 @@ static void update(View& v,bool includeHidden=false) {
         visual.mask={visual.x,visual.y,client.right,visual.y+visual.height};
         // Never paint over the margin when a header is horizontally out of view.
         const auto textStart=send(w,2164,0,pos)+send(w,2398); // SCI_GETXOFFSET
-        if(visual.x<textStart || visual.x<0 || visual.x>=client.right || visual.y<0 || visual.y>=client.bottom) continue;
+        if(visual.x<textStart || visual.x<0 || visual.x>=client.right ||
+            visual.y+visual.height<=0 || visual.y>=client.bottom) continue;
         HFONT font=visualFont(w,visual.style,dc);
         HGDIOBJ old=font?SelectObject(dc,font):nullptr;
         SIZE space{},dots{};
@@ -220,27 +221,61 @@ static void update(View& v,bool includeHidden=false) {
         next.emplace(line,std::move(visual));
     }
     ReleaseDC(w,dc);
-    bool changed=false;
     for(auto it=v.visuals.begin();it!=v.visuals.end();) {
         if(!next.count(it->first)) {
-            auto ti=tool(v,it->first);send(v.tooltip,TTM_DELTOOLW,0,reinterpret_cast<LPARAM>(&ti));
-            it=v.visuals.erase(it);changed=true;
+            if(it->second.visible) {
+                auto ti=tool(v,it->first);send(v.tooltip,TTM_DELTOOLW,0,reinterpret_cast<LPARAM>(&ti));
+                it->second.visible=false;
+                if(it->second.cache && it->second.cache->overlay) ShowWindow(it->second.cache->overlay,SW_HIDE);
+                // Hiding the child invalidates the exposed parent area itself.
+            }
+            if(it->first>=total || send(w,sci::GetFoldExpanded,it->first)) it=v.visuals.erase(it);
+            else ++it;
         } else ++it;
     }
     for(auto& entry:next) {
         auto old=v.visuals.find(entry.first);
         const bool added=old==v.visuals.end();
-        if(!added && old->second.text==entry.second.text && old->second.tip==entry.second.tip &&
+        const bool wasVisible=!added && old->second.visible;
+        const bool sameImage=!added && old->second.text==entry.second.text &&
             old->second.commentStart==entry.second.commentStart && old->second.commentStyle==entry.second.commentStyle &&
-            old->second.selectionTrigger==entry.second.selectionTrigger && old->second.blockEnd==entry.second.blockEnd &&
-            old->second.style==entry.second.style && sameRect(old->second.mask,entry.second.mask) &&
-            sameRect(old->second.dots,entry.second.dots)) continue;
-        if(!added) {auto ti=tool(v,entry.first);send(v.tooltip,TTM_DELTOOLW,0,reinterpret_cast<LPARAM>(&ti));}
+            old->second.style==entry.second.style && old->second.height==entry.second.height;
+        const bool sameTip=!added && old->second.tip==entry.second.tip;
+        const bool samePosition=!added && sameRect(old->second.mask,entry.second.mask) &&
+            sameRect(old->second.dots,entry.second.dots);
+        if(wasVisible && sameImage && sameTip && samePosition &&
+            old->second.selectionTrigger==entry.second.selectionTrigger && old->second.blockEnd==entry.second.blockEnd) continue;
+        if(!added && sameImage && sameTip) {
+            // Scrolling changes geometry only. Keep both string buffers, the
+            // bitmap, child HWND and tooltip registration alive.
+            auto& saved=old->second;
+            saved.visible=true;
+            saved.x=entry.second.x;saved.y=entry.second.y;
+            saved.mask=entry.second.mask;saved.dots=entry.second.dots;
+            saved.selectionTrigger=entry.second.selectionTrigger;saved.blockEnd=entry.second.blockEnd;
+            auto ti=tool(v,entry.first);ti.rect=saved.dots;ti.lpszText=saved.tip.data();
+            send(v.tooltip,wasVisible?TTM_NEWTOOLRECTW:TTM_ADDTOOLW,0,reinterpret_cast<LPARAM>(&ti));
+            if(!saved.cache) InvalidateRect(w,&saved.mask,FALSE);
+            continue;
+        }
+        if(wasVisible) {
+            if(!sameTip || !samePosition) {
+                auto ti=tool(v,entry.first);send(v.tooltip,TTM_DELTOOLW,0,reinterpret_cast<LPARAM>(&ti));
+            }
+        }
+        if(sameImage) entry.second.cache=std::move(old->second.cache);
         auto& saved=v.visuals[entry.first];saved=std::move(entry.second);
         auto ti=tool(v,entry.first);ti.rect=saved.dots;ti.lpszText=saved.tip.data();
-        send(v.tooltip,TTM_ADDTOOLW,0,reinterpret_cast<LPARAM>(&ti));changed=true;
+        // The string buffer may move even if its text is identical.
+        if(wasVisible && sameTip && samePosition)
+            send(v.tooltip,TTM_UPDATETIPTEXTW,0,reinterpret_cast<LPARAM>(&ti));
+        else send(v.tooltip,TTM_ADDTOOLW,0,reinterpret_cast<LPARAM>(&ti));
+        if(!sameImage || !wasVisible) InvalidateRect(w,&saved.mask,FALSE);
     }
-    if(changed) InvalidateRect(w,nullptr,FALSE);
+    // Retain a bounded off-screen cache rather than growing with the document.
+    for(auto it=v.visuals.begin();v.visuals.size()>256 && it!=v.visuals.end();) {
+        if(!it->second.visible) it=v.visuals.erase(it); else ++it;
+    }
     v.busy=false;
 }
 static LRESULT CALLBACK previewWindowProc(HWND window,UINT message,WPARAM a,LPARAM b) {
@@ -270,8 +305,11 @@ static void paintVisuals(View& v) {
     HDC dc=GetDC(v.window);if(!dc) return;
     HDC buffer=CreateCompatibleDC(dc);
     if(!buffer) {ReleaseDC(v.window,dc);return;}
+    RECT client{};GetClientRect(v.window,&client);
+    HDWP positions=BeginDeferWindowPos(static_cast<int>(v.visuals.size()));
     for(auto& entry:v.visuals) {
         auto& visual=entry.second;
+        if(!visual.visible) continue;
         if(send(v.window,sci::GetFoldExpanded,entry.first)) continue;
         HFONT font=visualFont(v.window,visual.style,dc);
         if(!font) continue;
@@ -281,6 +319,9 @@ static void paintVisuals(View& v) {
         auto commentColour=static_cast<COLORREF>(send(v.window,2481,visual.commentStyle));
         const auto normalBackground=static_cast<COLORREF>(send(v.window,2482,visual.style));
         auto background=normalBackground;
+        // STYLE_BRACELIGHT (34) follows the active Notepad++ theme settings.
+        auto markerForeground=static_cast<COLORREF>(send(v.window,2481,34));
+        auto markerBackground=static_cast<COLORREF>(send(v.window,2482,34));
         const auto selectionStart=send(v.window,2143),selectionEnd=send(v.window,2145);
         const bool selected=selectionStart<visual.selectionTrigger && selectionEnd>=visual.blockEnd;
         if(selected) {
@@ -292,14 +333,18 @@ static void paintVisuals(View& v) {
             background=RGB(blend(GetRValue(colour),GetRValue(normalBackground)),
                 blend(GetGValue(colour),GetGValue(normalBackground)),blend(GetBValue(colour),GetBValue(normalBackground)));
             if(send(v.window,2756,textElement)) foreground=commentColour=static_cast<COLORREF>(send(v.window,2754,textElement))&0xffffff;
+            markerBackground=background;
+            if(send(v.window,2756,textElement)) markerForeground=foreground;
         }
-        const int width=visual.mask.right-visual.mask.left;
+        const int overlayWidth=visual.mask.right-visual.mask.left;
+        const int width=client.right; // Horizontal scrolling changes clipping, not bitmap content.
         const int height=visual.height;
-        if(width<=0 || height<=0) {DeleteObject(font);continue;}
+        if(width<=0 || overlayWidth<=0 || height<=0) {DeleteObject(font);continue;}
         auto& cache=visual.cache;
-        // Content/position changes replace Visual in update(); appearance changes invalidate here.
+        // Position changes retain the image; only content/appearance/viewport size rebuild it.
         if(cache && (cache->width!=width || cache->height!=height ||
             cache->foreground!=foreground || cache->commentColour!=commentColour ||
+            cache->markerForeground!=markerForeground || cache->markerBackground!=markerBackground ||
             cache->background!=background || std::memcmp(&cache->font,&fontInfo,sizeof(fontInfo))!=0)) cache.reset();
         if(!cache) {
             auto next=std::make_unique<PreviewBitmap>();
@@ -307,6 +352,7 @@ static void paintVisuals(View& v) {
             if(!next->bitmap) {DeleteObject(font);continue;}
             next->width=width;next->height=height;next->font=fontInfo;
             next->foreground=foreground;next->commentColour=commentColour;next->background=background;
+            next->markerForeground=markerForeground;next->markerBackground=markerBackground;
             auto oldBitmap=SelectObject(buffer,next->bitmap);
             auto oldFont=SelectObject(buffer,font);
             SetTextColor(buffer,foreground);SetBkColor(buffer,background);
@@ -319,6 +365,11 @@ static void paintVisuals(View& v) {
             RECT textMask{0,0,std::min<LONG>(width,textSize.cx),height};
             SetBkColor(buffer,background);
             ExtTextOutW(buffer,0,y,ETO_OPAQUE|ETO_CLIPPED,&textMask,visual.text.data(),static_cast<UINT>(visual.commentStart),nullptr);
+            const auto markerLength=std::min<size_t>(3,visual.commentStart);
+            SIZE markerSize{};GetTextExtentPoint32W(buffer,visual.text.data(),static_cast<int>(markerLength),&markerSize);
+            RECT markerMask{0,0,std::min<LONG>(width,markerSize.cx),height};
+            SetTextColor(buffer,markerForeground);SetBkColor(buffer,markerBackground);
+            ExtTextOutW(buffer,0,y,ETO_OPAQUE|ETO_CLIPPED,&markerMask,visual.text.data(),static_cast<UINT>(markerLength),nullptr);
             if(visual.commentStart<visual.text.size()) {
                 SIZE prefix{};
                 GetTextExtentPoint32W(buffer,visual.text.data(),static_cast<int>(visual.commentStart),&prefix);
@@ -339,11 +390,22 @@ static void paintVisuals(View& v) {
                 return RegisterClassW(&cls);
             }();
             if(registered) cache->overlay=CreateWindowExW(WS_EX_NOACTIVATE,L"NppFoldTailPreview",L"",
-                WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,visual.x,visual.y,width,height,
+                WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,visual.x,visual.y,overlayWidth,height,
                 v.window,nullptr,GetModuleHandleW(nullptr),cache.get());
+        }
+        if(cache->overlay) {
+            RECT actual{};GetWindowRect(cache->overlay,&actual);
+            MapWindowPoints(nullptr,v.window,reinterpret_cast<POINT*>(&actual),2);
+            if(!sameRect(actual,visual.mask) || !IsWindowVisible(cache->overlay)) {
+                constexpr UINT flags=SWP_NOACTIVATE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_SHOWWINDOW;
+                if(positions) positions=DeferWindowPos(positions,cache->overlay,nullptr,
+                    visual.x,visual.y,overlayWidth,height,flags);
+                else SetWindowPos(cache->overlay,nullptr,visual.x,visual.y,overlayWidth,height,flags);
+            }
         }
         DeleteObject(font);
     }
+    if(positions) EndDeferWindowPos(positions);
     DeleteDC(buffer);
     ReleaseDC(v.window,dc);
 }
