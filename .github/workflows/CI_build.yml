@@ -55,11 +55,29 @@ jobs:
 
     - name: zip artifacts for ${{ matrix.msys }} / ${{ matrix.configuration }}
       run: |
-           7z a ${{ env.Projectname }}_${{ matrix.arch }}_${{ matrix.configuration }}.zip .\build\${{ env.Projectname }}.dll
+           $header = Get-Content src/version.h -Raw
+           if ($header -notmatch '#define NPPFOLDTAIL_VERSION "([0-9]+\.[0-9]+\.[0-9]+)"') {
+             throw 'Could not read the plugin version.'
+           }
+           $version = $Matches[1]
+           $arch = if ('${{ matrix.arch }}' -eq 'i686') { 'x86' } else { 'x64' }
+           $zipName = "${{ env.Projectname }}-$version-$arch.zip"
+           $zipPath = Join-Path $PWD $zipName
+           Add-Type -AssemblyName System.IO.Compression.FileSystem
+           $zip = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
+           try {
+             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $PWD 'build/NppFoldTail.dll'), 'NppFoldTail.dll') | Out-Null
+             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $PWD 'LICENSE'), 'LICENSE') | Out-Null
+           } finally {
+             $zip.Dispose()
+           }
+           "RELEASE_ZIP=$zipName" >> $Env:GITHUB_ENV
+           Get-FileHash $zipPath -Algorithm SHA256
 
     - name: Archive artifacts for Release ${{ matrix.arch }}
       uses: actions/upload-artifact@v7
       with:
         name: NppFoldTail-${{ matrix.arch }}-${{ matrix.configuration }}
-        path: ${{ env.Projectname }}_${{ matrix.arch }}_${{ matrix.configuration }}.zip
+        path: ${{ env.RELEASE_ZIP }}
+        if-no-files-found: error
         archive: false

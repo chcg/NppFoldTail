@@ -43,10 +43,10 @@ Requires Windows and Notepad++ x64. x86 and ARM64 builds are not provided.
 
 Manually tested with Notepad++ v8.9.8.1 (64-bit). Compatibility with other versions has not been verified.
 
-1. Download `NppFoldTail-0.8.2-x64.zip` from [Releases](https://github.com/seantw/NppFoldTail/releases).
+1. Download `NppFoldTail-0.8.3-x64.zip` from [Releases](https://github.com/seantw/NppFoldTail/releases).
 2. Close all Notepad++ windows.
 3. Extract the ZIP and place `NppFoldTail.dll` in `Notepad++/plugins/NppFoldTail/`.
-4. Restart Notepad++ and check **Plugins → NppFoldTail → About NppFoldTail** for version **0.8.2**.
+4. Restart Notepad++ and check **Plugins → NppFoldTail → About NppFoldTail** for version **0.8.3**.
 
 ## Options
 
@@ -80,6 +80,8 @@ Requires x86_64 MinGW-w64 `g++` / `windres` on PATH. The development environment
 
 Creates `build/NppFoldTail.dll` using size optimisation and static C++ runtime linking.
 
+GitHub Actions also compiles x64 and x86 builds. For releases, use the tested x64 CI ZIP, which contains `NppFoldTail.dll` and `LICENSE` at its root. The x86 CI build is experimental and has not been manually tested or published for Plugins Admin.
+
 ## Limitations
 
 - Wrapped header lines and multiline HTML/XML opening tags are not supported.
@@ -87,6 +89,13 @@ Creates `build/NppFoldTail.dll` using size optimisation and static C++ runtime l
 - Other embedded script languages in HTML and XML CDATA previews are not supported.
 - PowerShell block comments are not previewed.
 - Synthetic preview text cannot be edited directly.
+
+## Changes in 0.8.3
+
+- Switches release packaging to the GitHub Actions x64 build.
+- Fixes CI tool paths and MinGW-w64 CRT linking, and removes the unused make dependency.
+- Packages the versioned release ZIP with the DLL and LICENSE at its root.
+- Folding behaviour is unchanged from 0.8.2.
 
 ## Changes in 0.8.2
 
