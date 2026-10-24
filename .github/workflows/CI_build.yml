@@ -28,27 +28,30 @@ jobs:
       uses: actions/checkout@v7
 
     - name: Install and update MSYS2 tools
+      id: msys2
       uses: msys2/setup-msys2@v2
       with:
         msystem: ${{ matrix.msys }}
-        install: mingw-w64-${{ matrix.env }}-${{ matrix.compiler }} mingw-w64-${{ matrix.env }}-make
+        install: mingw-w64-${{ matrix.env }}-${{ matrix.compiler }}
         update: true
-        release: false
+        release: true
 
     - name: Build of plugin dll
       working-directory: .\
+      env:
+        MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
       run: |
            Write-host "${{ matrix.msys }}"
            Write-host "${{ matrix.configuration }}"
            $Env:MSYSTEM = '${{ matrix.msys }}'
-           $Env:Path = 'C:\msys64\usr\bin' + [IO.Path]::PathSeparator + $Env:Path
-           $Env:Path = 'C:\msys64\' + '${{ matrix.msys }}'.ToLower() + '\bin' + [IO.Path]::PathSeparator + $Env:Path
-           if ( $${{ matrix.configuration == 'Debug'}} ) {$Env:DEBUG = '1'}
+           $tools = Join-Path $Env:MSYS2_ROOT ('${{ matrix.msys }}'.ToLower() + '\bin')
+           $usr = Join-Path $Env:MSYS2_ROOT 'usr\bin'
+           $Env:Path = $tools + [IO.Path]::PathSeparator + $usr + [IO.Path]::PathSeparator + $Env:Path
            Write-Output "Tools version:"
-           Write-Output (((${{ matrix.compiler }} --version) | select-object -first 1) + " " + (${{ matrix.compiler }} -dumpmachine))
-           Write-Output (mingw32-make --version) | select-object -first 1
-           Write-Output (sh --version) | select-object -first 1
-           if ( $${{ matrix.arch == 'i686'}} ) { .\build-x32.bat } else { .\build-x64.bat }
+           Write-Output ((g++ --version | Select-Object -First 1) + " " + (g++ -dumpmachine))
+           Write-Output (Get-Command g++).Source
+           if ('${{ matrix.arch }}' -eq 'i686') { .\build-x32.bat } else { .\build-x64.bat }
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: zip artifacts for ${{ matrix.msys }} / ${{ matrix.configuration }}
       run: |
@@ -57,5 +60,6 @@ jobs:
     - name: Archive artifacts for Release ${{ matrix.arch }}
       uses: actions/upload-artifact@v7
       with:
+        name: NppFoldTail-${{ matrix.arch }}-${{ matrix.configuration }}
         path: ${{ env.Projectname }}_${{ matrix.arch }}_${{ matrix.configuration }}.zip
         archive: false
